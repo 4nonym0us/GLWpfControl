@@ -97,7 +97,7 @@ namespace OpenTK.Wpf
 		
 		public bool CanInvokeOnHandledEvents { get; set; } = true;
 		
-		public bool RegisterToEventsDirectly { get; set; } = true;
+		public bool RegisterToEventsDirectly { get; set; } = false; // `True` leads to mem leak
 
         /// <summary>
         /// Used to create a new control. Before rendering can take place, <see cref="Start(GLWpfControlSettings)"/> must be called.
@@ -152,15 +152,15 @@ namespace OpenTK.Wpf
 	        {
 	            EventManager.RegisterClassHandler(typeof(Control), Keyboard.KeyDownEvent, new KeyEventHandler(OnKeyDown), CanInvokeOnHandledEvents);
 		        EventManager.RegisterClassHandler(typeof(Control), Keyboard.KeyUpEvent, new KeyEventHandler(OnKeyUp), CanInvokeOnHandledEvents);
-	        }
-			
+            }
+
             Loaded += (a, b) => {
                 InvalidateVisual();
             };
             Unloaded += (a, b) => OnUnloaded();
             Ready?.Invoke();
         }
-        
+
         private void SetupRenderSize() {
             if (_renderer == null || Settings == null) {
                 return;

@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using JetBrains.Annotations;
 using OpenTK.Graphics.Wgl;
 using OpenTK.Windowing.Common;
@@ -12,21 +13,20 @@ using Window = System.Windows.Window;
 using WindowState = OpenTK.Windowing.Common.WindowState;
 
 namespace OpenTK.Wpf {
-    
+
     /// This contains the DirectX and OpenGL contexts used in this control.
     internal sealed class DxGlContext : IDisposable {
-        
         /// The directX context. This is basically the root of all DirectX state.
-        public IntPtr DxContextHandle { get; }
-        
+        public IntPtr DxContextHandle { get; private set; }
+
         /// The directX device handle. This is the graphics card we're running on.
-        public IntPtr DxDeviceHandle { get; }
-        
+        public IntPtr DxDeviceHandle { get; private set; }
+
         /// The OpenGL Context. This is basically the root of all OpenGL state.
         public IGraphicsContext GraphicsContext { get; }
-        
+
         /// An OpenGL handle to the DirectX device. Created and used by the WGL_dx_interop extension.
-        public IntPtr GlDeviceHandle { get; }
+        public IntPtr GlDeviceHandle { get; private set; }
 
         /// The shared context we (may) want to lazily create/use.
         private static IGraphicsContext _sharedContext;
@@ -35,6 +35,9 @@ namespace OpenTK.Wpf {
         private static IDisposable[] _sharedContextResources;
         /// The number of active controls using the shared context.
         private static int _sharedContextReferenceCount;
+        private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
+        private bool _disposed;
+        private int _sharedContextResourcesDisposedFlag = 0;
 
 
         public DxGlContext([NotNull] GLWpfControlSettings settings) {
@@ -92,8 +95,8 @@ namespace OpenTK.Wpf {
                                                 $"either ensure all of your context settings are identical, or provide an " +
                                                 $"external context via the '{nameof(GLWpfControlSettings.ContextToUse)}' field.");
                 }
-            } 
-            
+            }
+
             else {
                 var nws = NativeWindowSettings.Default;
                 nws.StartFocused = false;
@@ -131,14 +134,54 @@ namespace OpenTK.Wpf {
         }
 
         public void Dispose() {
+            DisposeInternal();
+            GC.SuppressFinalize(this);
+        }
+
+        private void DisposeInternal() {
+            if (_disposed) {
+                return;
+            }
+
             // we only dispose of the graphics context if we're using the shared one.
             if (ReferenceEquals(_sharedContext, GraphicsContext)) {
-                if (Interlocked.Decrement(ref _sharedContextReferenceCount) == 0) {
-                    foreach (var resource in _sharedContextResources) {
-                        resource.Dispose();
+                if (Interlocked.CompareExchange(ref _sharedContextResourcesDisposedFlag, 1, 0) == 0 &&
+                    Interlocked.Decrement(ref _sharedContextReferenceCount) == 0) {
+                    if (_dispatcher != null) {
+                        if (_dispatcher.CheckAccess()) {
+                            foreach (var resource in _sharedContextResources) {
+                                resource.Dispose();
+                            }
+                        }
+                        else {
+                            _dispatcher?.BeginInvoke(() => {
+                                foreach (var resource in _sharedContextResources) {
+                                    resource.Dispose();
+                                }
+                            });
+                        }
                     }
                 }
             }
+
+            if (DxDeviceHandle != default) {
+                DXInterop.Release(DxDeviceHandle);
+                DxDeviceHandle = IntPtr.Zero;
+            }
+
+            if (DxContextHandle != default) {
+                DXInterop.Release(DxContextHandle);
+                DxContextHandle = IntPtr.Zero;
+            }
+
+            if (GlDeviceHandle != default) {
+                Wgl.DXCloseDeviceNV(GlDeviceHandle);
+                GlDeviceHandle = IntPtr.Zero;
+            }
+
+            _disposed = true;
         }
+
+        ~DxGlContext() => DisposeInternal();
     }
 }
